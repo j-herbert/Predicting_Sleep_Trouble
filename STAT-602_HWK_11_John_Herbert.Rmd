@@ -1,0 +1,1632 @@
+---
+title: "STAT 602 - Homework 11"
+author: "John Herbert"
+output:
+  pdf_document: default
+  word_document: default
+urlcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message=F,warning=F,echo=F,fig_height=10,fig_width=7,cache = F)
+```
+
+# Document External Libraries
+
+* **NHANES** package for *NHANES* dataset
+* **knitr** package used for *kable* function used to format tables
+* **ggplot2** package for graphs
+* **GGally** package for pairs plot
+* **dplyr** package for restructuring data frames
+* **tidyverse** package for restructuring data frames
+* **gridExtra** package for formatting multiple **ggplot2** graphs
+* **splines** package for spline regression modeling
+* **randomForest** package used for feature selection modeling
+* **class** package for KNN models
+* **MASS** package for LDA and QDA models
+* **fast Dummies** package for dummyvariable conversion
+* **klaR** package for LDA and QDA plots
+* **nnet** package for neural network model
+
+```{r}
+# install.packages('NHANES')
+suppressWarnings(suppressMessages(library(NHANES)))
+# install.packages('knitr')
+suppressWarnings(suppressMessages(library(knitr)))
+# install.packages('ggplot2')
+suppressWarnings(suppressMessages(library(ggplot2)))
+# install.packages('GGally')
+suppressWarnings(suppressMessages(library(GGally)))
+# install.packages('gridExtra')
+suppressWarnings(suppressMessages(library(gridExtra)))
+# install.packages('dplyr')
+suppressWarnings(suppressMessages(library(dplyr)))
+# install.packages('tidyr')
+suppressWarnings(suppressMessages(library(tidyr)))
+# install.packages('MASS')
+suppressWarnings(suppressMessages(library(MASS)))
+# install.packages('fastDummies')
+suppressWarnings(suppressMessages(library(fastDummies)))
+# install.packages('mlbench')
+suppressWarnings(suppressMessages(library(mlbench)))
+# install.packages('caret')
+suppressWarnings(suppressMessages(library(caret)))
+# install.packages('randomForest')
+suppressWarnings(suppressMessages(library(randomForest)))
+# install.packages('class')
+suppressWarnings(suppressMessages(library(class)))
+# install.packages('MASS')
+suppressWarnings(suppressMessages(library(MASS)))
+# install.packages('klaR')
+suppressWarnings(suppressMessages(library(klaR)))
+# install.packages('nnet')
+suppressWarnings(suppressMessages(library(nnet)))
+```
+
+# Reusable Functions
+
+* The misclassification function created in homework 3 (*misclass.fun.JH*) will be reused for questions in this homework.
+
+```{r}    
+misclass.fun.JH <- function(prediction,actual,threshold=0.5){
+  prediction <- ifelse(prediction >= threshold,1,0)
+  
+  TP <- sum(ifelse(actual == 1 & prediction == 1,1,0))
+  TN <- sum(ifelse(actual == 0 & prediction == 0,1,0))
+  FP <- sum(ifelse(actual == 0 & prediction == 1,1,0))
+  FN <- sum(ifelse(actual == 1 & prediction == 0,1,0))
+  
+  mclass <- (FP+FN)/(TP+TN+FP+FN)
+  sens <- TP/(TP+FN)
+  spec <- TN/(TN+FP)
+  
+  metrics <- data.frame(Metric=c('Misclass','TPR','TNR'),Value=c(mclass,sens,spec))
+  return(metrics)
+}
+```
+
+# Exercises
+*Use set.seed(202111) when appropriate to make results reproducible.*
+
+## Question 1 (MDSR 8.1 pg 201)
+
+(Modified from 8.1 pg 201 in **Modern Data Science with R**.) The ability to get a good night's sleep is correlated with many positive health outcomes. The `NHANES` data set contains a binary variable `SleepTrouble` that indicates whether each person has trouble sleeping. For each of the listed models -  Logistic Regression, Neural network, K - Nearest Neighbors, LDA, and QDA, repeat all of the following steps:
+
+
+### Task 1: Data Cleansing, Train/Test Split, Scaling, & Feature Selection
+
+Using the Validation Set Approach with a split of 90/10, build a classifier for `SleepTrouble` on the training data. You will have to use a subset of the variables.
+
+**Answer**
+
+#### Step 1: Importing and Examining the Data
+
+I imported the data from the NHANES package, which was a helath statistic survey taken in 2009-2012. The propose of this study is to use the *SleepTrouble* variable as the target (either a Yes or No), and a number of features to determine if we can predict whether a particpants has sleep trouble or not.
+
+```{r}
+start <- as.numeric(Sys.time())
+nhanes.dat <- NHANES
+# summary(nhanes.dat)
+# head(nhanes.dat,20)
+# write.csv(NHANES,'nhanes.csv')
+cat('The NHANES dataset\'s contains',dim(NHANES)[1],'rows or observations and',dim(NHANES)[2],'variables or columns')
+```
+
+#### Step 2: Removing Null Target Observations and Subsetting Variables
+
+According to the documentation, the survey only asked participants if they had sleep trouble when they were 16 years old or less. Therefore, all particpants 16 and younger were dropped. This reduced the number of observations from 10,000 to 7,772.
+
+```{r}
+nhanes.dat <- nhanes.dat %>% filter(!is.na(SleepTrouble))
+
+cat('The number of rows after removing null target observations',dim(nhanes.dat)[1])
+```
+
+There are also a number of variables that have a large number of null values that will not add much insight and mostly noise into the model. Therefore, any variable that has 80% null values will be removed from the dataset. The variables removed are listed below as well as their corresponding percantage of null values.
+
+```{r}
+nhanes.class <- data.frame(Variable=character(),Class=character(),Null_Values=numeric(),Perc_Null=numeric())
+
+for(i in 1:dim(nhanes.dat)[2]){
+ nhanes.class[i,1] <- names(nhanes.dat[i])
+ nhanes.class[i,2] <- sapply(nhanes.dat[i],class)
+ nhanes.class[i,3] <- sum(is.na(nhanes.dat[i]))
+ nhanes.class[i,4] <- nhanes.class[i,3]/dim(nhanes.dat)[1]
+}
+
+null.var <- nhanes.class %>% filter(Perc_Null<0.8)
+nhanes.dat <- nhanes.dat[,null.var[,1],with=F]
+
+kable(nhanes.class[,c(1,2,4)] %>% filter(Perc_Null>=0.8),digits=3,caption='Null Values over 80%')
+
+cat('Reduction of variables with over 80% null reduces number of variables to',dim(nhanes.dat)[2])
+```
+
+Upon studying the literature and examining the other variables, there were a number of variables that were very similar or correlated to other variables, repetitive, or unuseful:
+
+* **ID**: Used to identify the particpant and not useful in my analysis
+* **SurveyYr**: Used to determine the when the survey was done and unuseful for my analysis
+* **AgeMonths**: Number of Age variables, and since we are looking at partipants 16 and older, the months old is unnecessary
+* **Race3**: Was not used for the 2009-10 survey, **Race1** was used instead
+* **Testosterone**: Was not used for the 2009-10 survey
+* **SleepHrsNight**: Very similar to the target variable and not useful as a predictor
+* **Height**: Unlikely to be a factor in sleep trouble (unless tall past a certain point can't find a appropiately sized bed). Also, not a proactive variable in how to improve sleep trouble.
+* **BMI_WHO**: Opted to use the *BMI* variable instead of this categorical variable giving the same data
+* **HHIncomeMid**: Opted to use **HHIncome** as a predictor instead
+* **Poverty**: Opted to use **HHIncome** as a predictor instead
+* **TVHrsDay**: Was not used for the 2009-10 survey
+* **CompHrsDay**: Was not used for the 2009-10 survey
+* **Smoke100n**: No documentation on variable, however appears to be the same as **Smoke100**
+* **BPSys1,BPSys2,BPSys3**: Used **BPSysAve** instead
+* **BPDia1,BPDia2,BPDia3**: Used **BPDiaAve** instead
+* **SexAge**: There are a number of other sex related variables that were used instead and more focused on current sexual activity
+* **SexNumPartnLife**: There are a number of other sex related variables that were used instead and more focused on current sexual activity
+* **Age1stBaby**: There are a number of other pregnancy related variable that were used and more focused on current pregnancy activity
+* **nPregnancies**: There are a number of other pregnency related variable that were used and more focused on current pregnancy activity
+* **SmokeAge**: There are a number of other smoking related variable that were used and more focused on current smoking activity
+* **AgeFirstMarij**: There are a number of other marijuana related variable that were used and more focused on current marijuana activity
+* **DirectChol**: Very similar to **TotChol**, which was used instead
+* **Weight**: Generally not a good metric to use a health statistic as it will depend on a number of other factors. **BMI** was used instead.
+
+```{r}
+# Removing Variables
+nhanes.dat <- nhanes.dat %>% dplyr::select(!c(ID,SurveyYr,AgeMonths,Race3,Testosterone,SleepHrsNight,Height,BMI_WHO,HHIncomeMid,Poverty,TVHrsDay,CompHrsDay,Smoke100n,BPSys1,BPSys2,BPSys3,BPDia1,BPDia2,BPDia3,SexAge,SexNumPartnLife,Age1stBaby,nPregnancies,SmokeAge,AgeFirstMarij,DirectChol,Weight))
+
+cat('The number of columns after removing repetitive/unuseful variables is',dim(nhanes.dat)[2])
+```
+
+Seperating variables between binary, categorical, and continuous. Also converting heirarchical categorical variables into numeric values, as there is importance in the order of the factor. For example, *AgeDecade* is a categorical variable but has meaning in the order of each category. In addition, I removed the target variable from these datasets to make missing value and scaling easier. 
+
+```{r}
+nhanes.class.adj <- data.frame(Variable=character(),Class=character())
+
+for(i in 1:dim(nhanes.dat)[2]){
+ nhanes.class.adj[i,1] <- names(nhanes.dat[i])
+ nhanes.class.adj[i,2] <- sapply(nhanes.dat[i],class)
+}
+
+# Creating a vector of column names for all factor variables excluding the Target SleepTrouble
+nhanes.fact <- nhanes.class.adj %>% filter(Class=='factor'& Variable != 'SleepTrouble')
+nhanes.fact <- as.character(nhanes.fact[,1])
+
+# Creating a vector of column names for all numeric variables
+nhanes.num <- nhanes.class.adj %>% filter(Class == 'integer' | Class == 'numeric')
+nhanes.num <- as.character(nhanes.num[,1])
+
+# Creating a vector of column names for all factor variables that will be converted to numeric variables
+nhanes.hier <- nhanes.class.adj %>% filter(Variable %in% c('AgeDecade','Education','HHIncome','HealthGen','LittleInterest','Depressed'))
+nhanes.hier <- as.character(nhanes.hier[,1])
+
+# Remove hierarchical variables from factor vector
+nhanes.fact <- nhanes.fact[! nhanes.fact %in% nhanes.hier]
+
+# Combine hierarchical and numeric vectors together
+nhanes.num <- c(nhanes.num,nhanes.hier)
+```
+
+Converting the heirarchial variables mentioned in the step above to numeric and binding it with the other numeric variables.
+
+```{r}
+nhanes.num.dat <- as.data.frame(nhanes.dat[,nhanes.num])
+nhanes.num.dat <- nhanes.num.dat[,!names(nhanes.num.dat) %in% nhanes.hier]
+nhanes.fact.dat <- as.data.frame(nhanes.dat[,nhanes.fact])
+nhanes.hier.dat <- as.data.frame(nhanes.dat[,nhanes.hier])
+
+for(i in 1:dim(nhanes.hier.dat)[2]){
+  nhanes.hier.dat[,i] <- as.numeric(nhanes.hier.dat[,i])
+}
+
+nhanes.num.dat <- cbind(nhanes.num.dat,nhanes.hier.dat)
+cat('Dimensions of numeric variables is', dim(nhanes.num.dat),'and the dimension of categorical variables is', dim(nhanes.fact.dat))
+```
+
+#### Step 4: Handling Missing Categorical Variables
+
+Replace missing values for categorical variables. Showing the total missing values of the categorical features in the dataset.
+
+```{r}
+na.fact.dat <- data.frame(Variable=character(),Null=numeric())
+
+for(i in 1:dim(nhanes.fact.dat)[2]){
+  na.fact.dat[i,1] <- names(nhanes.fact.dat)[i]
+  na.fact.dat[i,2] <- sum(is.na(nhanes.fact.dat[,i]))
+}
+
+kable(na.fact.dat[order(na.fact.dat$Null,decreasing=T),],caption='Total Null Values of Categorical Variables')
+```
+
+Each categorical missing value was replaced with the following for each feature in the dataset:
+
+* **PregnantNow**: If observation is male, then not applicable, if observation is older than 59 then not applicable, else missing
+* **SexOrientation**: If observation is missing and age is not 18-59, then not applicable, else missing
+* **Marijuana**: If observation is missing and not age 18-59 then not applicable, else missing 
+* **RegularMarij**: If observation is missing and not age 18-59 then not applicable, else missing
+* **HardDrugs**: If observation is missing and not age 18-59 then not applicable, else missing
+* **SexEver**: If observation is missing and not age 18-59 then not applicable, else missing
+* **SameSex**: If observation is missing and not age 18-59 then not applicable, else missing
+* **Alcohol12PlusYr**: If observation is missing and age is younger than 18 then not applicable, else missing. Since it was not asked of partipants younger than 18, the survey assumes they do not drink 12 or more drinks in one year, which may or may not be true.
+* **Smoke100**: If observation is missing and age is younger than 20 then not applicable, else missing. Since it was not asked of partipants younger than 20, the survey assumes they have not smoked 100 cigarettes or more in their life, which may or may not be true.
+* **SmokeNow**: If observation is missing and age is younger than 20 then not applicable, else missing
+* **HomeOwn, Diabetes, Work**: Asked of all particapants, therefore all missing values are truly missing
+
+```{r}
+# PregnantNow variable missing values - if observation is male, then not applicable, if observation is older than 59 then not applicable, else missing
+pregnow <- character()
+ageD <- ifelse(is.na(nhanes.num.dat$AgeDecade),0,nhanes.num.dat$AgeDecade)
+age <- nhanes.dat$Age
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$PregnantNow[i]) && (ageD[i]>6 | nhanes.fact.dat$Gender[i] == 'male')){
+    pregnow[i] <- 'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$PregnantNow[i])){
+    pregnow[i] <- 'missing'
+  }
+  else{
+    pregnow[i] <- as.character(nhanes.fact.dat$PregnantNow[i])
+  }
+}
+nhanes.fact.dat$PregnantNow <- pregnow
+
+# SexOrientation - if SexOrientation is missing and age is not 18-59, then notapp, else missing
+sexori <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$SexOrientation[i]) && age[i] %in% c(0:17,60:80)){
+    sexori[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$SexOrientation[i])){
+    sexori[i] <- 'missing'
+  }
+  else{
+    sexori[i] <- as.character(nhanes.fact.dat$SexOrientation[i])
+  }
+}
+nhanes.fact.dat$SexOrientation <- sexori
+
+# Marijuana - if Marijuana is missings and not age is 18-59 then not app, else missing 
+marij <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$Marijuana[i]) && age[i] %in% c(16:17,60:80)){
+    marij[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$Marijuana[i])){
+    marij[i] <- 'missing'
+  }
+  else{
+    marij[i] <- as.character(nhanes.fact.dat$Marijuana[i])
+  }
+}
+nhanes.fact.dat$Marijuana <- marij
+
+# RegularMarij - if missing and not age is 18-59 then not app, else missing
+regmarij <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$RegularMarij[i]) && age[i] %in% c(16:17,60:80)){
+    regmarij[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$RegularMarij[i])){
+    regmarij[i] <- 'missing'
+  }
+  else{
+   regmarij[i] <- as.character(nhanes.fact.dat$RegularMarij[i])
+  }
+}
+nhanes.fact.dat$RegularMarij <- regmarij
+
+
+# HardDrugs - if missing and not age is 18-59 then not app, else missing
+
+hdrugs <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$HardDrugs[i]) && age[i] %in% c(16:17,60:80)){
+    hdrugs[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$HardDrugs[i])){
+    hdrugs[i] <- 'missing'
+  }
+  else{
+   hdrugs[i] <- as.character(nhanes.fact.dat$HardDrugs[i])
+  }
+}
+nhanes.fact.dat$HardDrugs <- hdrugs
+
+# SexEver -  if missing and not age is 18-59 then not app, else missing
+sexever <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$SexEver[i]) && age[i] %in% c(16:17,60:80)){
+    sexever[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$SexEver[i])){
+    sexever[i] <- 'missing'
+  }
+  else{
+    sexever[i] <- as.character(nhanes.fact.dat$SexEver[i])
+  }
+}
+nhanes.fact.dat$SexEver <- sexever
+
+# SameSex -  if missing and not age is 18-59 then not app, else missing
+samesex <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$SameSex[i]) && age[i] %in% c(16:17,60:80)){
+    samesex[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$SameSex[i])){
+    samesex[i] <- 'missing'
+  }
+  else{
+    samesex[i] <- as.character(nhanes.fact.dat$SameSex[i])
+  }
+}
+nhanes.fact.dat$SameSex <- samesex
+
+# Alcohol12PlusYr -  if missing and age is younger than 18 then not app, else missing
+alc12 <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$Alcohol12PlusYr[i]) && age[i] %in% c(16:17)){
+    alc12[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$Alcohol12PlusYr[i])){
+    alc12[i] <- 'missing'
+  }
+  else{
+    alc12[i] <- as.character(nhanes.fact.dat$Alcohol12PlusYr[i])
+  }
+}
+nhanes.fact.dat$Alcohol12PlusYr <- alc12
+
+# MaritalStatus -  if missing and age is younger than 20 then not app, else missing 
+marstat <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$MaritalStatus[i]) && age[i] %in% c(16:19)){
+    marstat[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$MaritalStatus[i])){
+    marstat[i] <- 'missing'
+  }
+  else{
+    marstat[i] <- as.character(nhanes.fact.dat$MaritalStatus[i])
+  }
+}
+nhanes.fact.dat$MaritalStatus <- marstat
+
+# Smoke100 -  if missing and age is younger than 20 then not app, else missing
+smk100 <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$Smoke100[i]) && age[i] %in% c(16:19)){
+    smk100[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$Smoke100[i])){
+    smk100[i] <- 'missing'
+  }
+  else{
+    smk100[i] <- as.character(nhanes.fact.dat$Smoke100[i])
+  }
+}
+nhanes.fact.dat$Smoke100 <- smk100
+
+# SmokeNow -  if missing and age is younger than 20 then not app, else missing
+smknow <- character()
+for(i in 1:dim(nhanes.fact.dat)[1]){
+  if(is.na(nhanes.fact.dat$SmokeNow[i]) && age[i] %in% c(16:19)){
+    smknow[i] <-'notapp'
+  }
+  else if(is.na(nhanes.fact.dat$SmokeNow[i])){
+    smknow[i] <- 'missing'
+  }
+  else{
+    smknow[i] <- as.character(nhanes.fact.dat$SmokeNow[i])
+  }
+}
+nhanes.fact.dat$SmokeNow <- smknow
+
+# HomeOwn - if NA then missing
+nhanes.fact.dat$HomeOwn <- ifelse(is.na(nhanes.fact.dat$HomeOwn),'missing',as.character(nhanes.fact.dat$HomeOwn))
+
+# Diabetes - if NA then missing
+nhanes.fact.dat$Diabetes <- ifelse(is.na(nhanes.fact.dat$Diabetes),'missing',as.character(nhanes.fact.dat$Diabetes))
+
+# Work - if NA then missing
+nhanes.fact.dat$Work <- ifelse(is.na(nhanes.fact.dat$Work),'missing',as.character(nhanes.fact.dat$Work))
+
+na.fact.dat <- data.frame(Variable=character(),Null=numeric())
+```
+
+Runinng the missing value count again to confirm that all missing values have been replaced in the categorical set.
+
+```{r}
+# Rerun null value count to confirm all changes removed null values
+na.fact.dat2 <- data.frame(Variable=character(),Null=numeric())
+for(i in 1:dim(nhanes.fact.dat)[2]){
+  na.fact.dat2[i,1] <- names(nhanes.fact.dat)[i]
+  na.fact.dat2[i,2] <- sum(is.na(nhanes.fact.dat[,i]))
+}
+
+kable(na.fact.dat2[order(na.fact.dat2$Null,decreasing=T),],caption='Total Null Values of Categorical Variables')
+```
+
+#### Step 5: Splitting Data into Train/Test Sets
+
+Before I can replace missing values for numeric features, I will have to split the data in the training and test sets. Since I will be replacing some of the missing values with the means, I cannot let my training set influence my test set. 
+To split the data, I used the *sample.int* function with a 90% training and 10% test split. This was done for the target, categorical, and numeric variables. In addition, there is an inbalance between the categories of the target (Yes and No). Therefore, each class was seperated then randomly split between train and test, then binded back together.
+
+Finally, while the **Age** variable was not used as a predictor, it was used as a filter to seperate the categories. Therfore, it was removed from the numeric train/test sets but maintained as a seperate variable.
+
+```{r}
+set.seed(202111)
+
+# Splitting the variables into Train/Test
+nhanes.yes <- nhanes.dat[nhanes.dat$SleepTrouble == 'Yes',]
+nhanes.no <- nhanes.dat[nhanes.dat$SleepTrouble == 'No',]
+
+sample.yes <- sample.int(n = nrow(nhanes.yes), size = floor(0.9*nrow(nhanes.yes)), replace = F)
+sample.no <- sample.int(n = nrow(nhanes.no), size = floor(0.9*nrow(nhanes.no)), replace = F)
+
+
+nhanes.fact.yes <- nhanes.fact.dat[nhanes.dat$SleepTrouble == 'Yes',]
+nhanes.fact.no <- nhanes.fact.dat[nhanes.dat$SleepTrouble == 'No',]
+
+fact.train.yes <- nhanes.fact.yes[sample.yes,]
+fact.test.yes <- nhanes.fact.yes[-sample.yes,]
+fact.train.no <- nhanes.fact.no[sample.no,]
+fact.test.no <- nhanes.fact.no[-sample.no,]
+fact.train <- rbind(fact.train.yes,fact.train.no)
+fact.test <- rbind(fact.test.yes,fact.test.no)
+
+
+nhanes.num.yes <- nhanes.num.dat[nhanes.dat$SleepTrouble == 'Yes',]
+nhanes.num.no <- nhanes.num.dat[nhanes.dat$SleepTrouble == 'No',]
+
+num.train.yes <- nhanes.num.yes[sample.yes,]
+num.test.yes <- nhanes.num.yes[-sample.yes,]
+num.train.no <- nhanes.num.no[sample.no,]
+num.test.no <- nhanes.num.no[-sample.no,]
+num.train <- rbind(num.train.yes,num.train.no)
+num.test <- rbind(num.test.yes,num.test.no)
+
+
+y.train.yes <- nhanes.yes$SleepTrouble[sample.yes]
+y.train.no <- nhanes.no$SleepTrouble[sample.no]
+y.test.yes <- nhanes.yes$SleepTrouble[-sample.yes]
+y.test.no <-  nhanes.no$SleepTrouble[-sample.no]
+y.train <- c(as.character(y.train.yes),as.character(y.train.no))
+y.test <- c(as.character(y.test.yes),as.character(y.test.no))  
+
+# Creating age variable for just training set and dropping from set
+age <- num.train$Age
+age.test <- num.test$Age
+num.train <-subset(num.train,select = -Age)
+num.test <-subset(num.test,select = -Age)
+
+cat('Total observations in the training set is',length(y.train),'and the total for the test set is',length(y.test))
+```
+
+#### Step 6: Replacing Missing Values for Continuous Variables in Training Set
+
+The process for replacing missing numeric variable is similar to the categorical one in that each feature was calculated inidvidually depending on the specification of the survey. The total number of missing values per feature is:
+
+```{r}
+na.num.dat <- data.frame(Variable=character(),Null=numeric())
+
+for(i in 1:dim(num.train)[2]){
+  na.num.dat[i,1] <- names(num.train)[i]
+  na.num.dat[i,2] <- sum(is.na(num.train[,i]))
+}
+
+kable(na.num.dat[order(na.num.dat$Null,decreasing=T),],caption='Total Null Values of Continuous Variables')
+```
+
+Each categorical missing value was replaced with the following for each feature in the dataset. For all mean replacements, I used the mean for the age decade as to estimate the actual value better than using the mean of the entire population. I did not use the Age mean as there may be a low number of ages and this would have too much noise for a generalization.
+
+* **AgeDecade**: Missing values are only age 80, so those are clasified to the group '70+'
+* **nBabies**: Female particpants aged 20 years or older. If male or younger than 20, then 0, else mean of AgeDecade
+* **PhysActiveDays**: Particpants 12 years or older, however in the dataset the youngest age is 16 so irrelevant, therefore, the mean of the physical activity days for the AgeDecade was used for all missing values
+* **AlcoholDay**: Participants 18 years and younger assumes that drinks consumed is zero. All participants 18 years and older with missing values are average of AgeDecade
+* **SexNumPartYear**: Participants not 18-59 assumed to have no sex partners, all other missing values replaced with average of AgeDecade
+* **AlcoholYear**: Participants younger than 18 assumes zero drinks. All other missing values uses mean of AgeDecade
+* **LittleInterest**: Participants younger than 18 assumes no days of little interest in doing things, all other missing values uses mean of AgeDecade
+* **Depressed**: Participants younger than 18 assumes no depression, all other missing values uses mean of AgeDecade
+* **DaysPhysHlthBad**: Reported for participants 12 and older, however the youngest in the set is 16, so all missing values takes average of AgeDecade
+* **DaysMentHlthBad**: Reported for participants 12 and older, however the youngest in the set is 16, so all missing values takes average of AgeDecade
+* **HealthGen**: Reported for participants 12 and older, however the youngest in the set is 16, so all missing values takes average of AgeDecade
+* **HHIncome**: No age restriction, so all missing values takes average of AgeDecade
+* **Education**: Participants 16-17 assumes 9-11thGrade and 18-19 assumes HighSchool, all other missing values uses mean of AgeDecade
+* **UrineFlow1**: Asked of participants 6 and older, therefore, all missing values takes average of AgeDecade
+* **TotChol**: Asked of participants 6 and older, therefore, all missing values takes average of AgeDecade
+* **BPSysAve, BPDiaAve**: Taken for all participants, therefore, all missing values takes average of AgeDecade
+* **UrineVol1**: Taken for participants 6 and older, therefore, all missing values takes average of AgeDecade
+* **Pulse**: Taken for all participants, therefore, all missing values takes average of AgeDecade
+* **BMI**: Taken for all participants over 2 years old, therefore, all missing values takes average of AgeDecade
+* **HomeRooms**: Asked of all participants, therefore, all missing values takes average of AgeDecade
+
+
+```{r}
+# AgeDecade - missing values are only age 80, so those are clasified to the group '70+'
+num.train$AgeDecade <- ifelse(is.na(num.train$AgeDecade),8,num.train$AgeDecade)
+
+# nBabies - Female particpants aged 20 years or older. If male or younger than 20, then 0, else mean of AgeDecade
+nbab <- numeric()
+mean.nbab <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(nBabies,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$nBabies[i]) && (age[i] %in% c(0:20) | fact.train$Gender == 'Male')){
+    nbab[i] <- 0
+  }
+  else if(is.na(num.train$nBabies[i])){
+    nbab[i] <- mean.nbab$Mean[mean.nbab$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    nbab[i] <- num.train$nBabies[i]
+  }
+}
+num.train$nBabies <- nbab 
+
+# PhysActiveDays - Particpants 12 years or older, however in the dataset the youngest age is 16 so irrelevant, therefore, the mean of the physical activity days for the AgeDecade was used for missing values
+phydays <- numeric()
+mean.phydays <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(PhysActiveDays,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$PhysActiveDays[i])){
+    phydays[i] <- mean.phydays$Mean[mean.phydays$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    phydays[i] <- num.train$PhysActiveDays[i]
+  }
+}
+num.train$PhysActiveDays <- phydays 
+
+# AlcoholDay - Participants 18 years and younger assumes that drinks consumed is zero, all participants 18 years and older with missing values are average of AgeDecade
+alcday <- numeric()
+mean.alcday <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(AlcoholDay,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$AlcoholDay[i]) && age[i] %in% c(0:17)){
+    alcday[i] <- 0
+  }
+  else if(is.na(num.train$AlcoholDay[i])){
+    alcday[i] <- mean.alcday$Mean[mean.alcday$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    alcday[i] <- num.train$AlcoholDay[i]
+  }
+}
+num.train$AlcoholDay <- alcday
+
+# SexNumPartYear - Participants not 18-59 assumed to have no sex partners, all other missing values replaced with average of AgeDecade
+sexnum <- numeric()
+mean.sexnum <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(SexNumPartYear,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$SexNumPartYear[i]) && age[i] %in% c(0:17,60:80)){
+    sexnum[i] <- 0
+  }
+  else if(is.na(num.train$SexNumPartYear[i])){
+    sexnum[i] <- mean.sexnum$Mean[mean.sexnum$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    sexnum[i] <- num.train$SexNumPartYear[i]
+  }
+}
+num.train$SexNumPartYear <- sexnum
+
+# AlcoholYear - Participants younger than 18 assumes zero drinks. All other missing values uses mean of AgeDecade
+alcyr <- numeric()
+mean.alcyr <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(AlcoholYear,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$AlcoholYear[i]) && age[i] %in% c(0:17)){
+    alcyr[i] <- 0
+  }
+  else if(is.na(num.train$AlcoholYear[i])){
+    alcyr[i] <- mean.alcyr$Mean[mean.alcyr$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    alcyr[i] <- num.train$AlcoholYear[i]
+  }
+}
+num.train$AlcoholYear <- alcyr
+
+# LittleInterest - Participants younger than 18 assumes no days of little interest in doing things, all other missing values uses mean of AgeDecade
+ltint <- numeric()
+mean.ltint <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(LittleInterest,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$LittleInterest[i]) && age[i] %in% c(0:17)){
+    ltint[i] <- 0
+  }
+  else if(is.na(num.train$LittleInterest[i])){
+    ltint[i] <- mean.ltint$Mean[mean.ltint$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    ltint[i] <- num.train$LittleInterest[i]
+  }
+}
+num.train$LittleInterest <- ltint
+
+# Depressed - Participants younger than 18 assumes no depression, all other missing values uses mean of AgeDecade
+depr <- numeric()
+mean.depr <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(Depressed,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$Depressed[i]) && age[i] %in% c(0:17)){
+    depr[i] <- 0
+  }
+  else if(is.na(num.train$Depressed[i])){
+    depr[i] <- mean.depr$Mean[mean.depr$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    depr[i] <- num.train$Depressed[i]
+  }
+}
+num.train$Depressed <- depr
+
+# DaysPhysHlthBad - Reported for participants 12 and older, however the youngest in the set is 16, so all missing values takes average of AgeDecade
+daysphy <- numeric()
+mean.daysphy <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(DaysPhysHlthBad,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$DaysPhysHlthBad[i])){
+    daysphy[i] <- mean.daysphy$Mean[mean.daysphy$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    daysphy[i] <- num.train$DaysPhysHlthBad[i]
+  }
+}
+num.train$DaysPhysHlthBad <- daysphy
+
+# DaysMentHlthBad - Reported for participants 12 and older, however the youngest in the set is 16, so all missing values takes average of AgeDecade
+daysment <- numeric()
+mean.daysment <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(DaysMentHlthBad,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$DaysMentHlthBad[i])){
+    daysment[i] <- mean.daysment$Mean[mean.daysment$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    daysment[i] <- num.train$DaysMentHlthBad[i]
+  }
+}
+num.train$DaysMentHlthBad <- daysment
+
+# HealthGen - Reported for participants 12 and older, however the youngest in the set is 16, so all missing values takes average of AgeDecade
+hgen <- numeric()
+mean.hgen <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(HealthGen,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$HealthGen[i])){
+    hgen[i] <- mean.hgen$Mean[mean.hgen$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    hgen[i] <- num.train$HealthGen[i]
+  }
+}
+num.train$HealthGen <- hgen
+
+# HHIncome - No age restriction, so all missing values takes average of AgeDecade
+hhinc <- numeric()
+mean.hhinc <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(HHIncome,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$HHIncome[i])){
+    hhinc[i] <- mean.hhinc$Mean[mean.hhinc$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    hhinc[i] <- num.train$HHIncome[i]
+  }
+}
+num.train$HHIncome <- hhinc
+
+# Education - Participants 16-17 assumes 9-11thGrade and 18-19 assumes HighSchool, all other missing values uses mean of AgeDecade
+edu <- numeric()
+mean.edu <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(Education,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$Education[i]) && age[i] %in% c(16:17)){
+    edu[i] <- 2
+  }
+  else if(is.na(num.train$Education[i]) && age[i] %in% c(18:19)){
+    edu[i] <- 3
+  }
+  else if(is.na(num.train$Education[i])){
+    edu[i] <- mean.edu$Mean[mean.edu$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    edu[i] <- num.train$Education[i]
+  }
+}
+num.train$Education <- edu
+
+# UrineFlow1 - Asked of participants 6 and older, therefore, all missing values takes average of AgeDecade
+urnf <- numeric()
+mean.urnf <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(UrineFlow1,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$UrineFlow1[i])){
+    urnf[i] <- mean.urnf$Mean[mean.urnf$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    urnf[i] <- num.train$UrineFlow1[i]
+  }
+}
+num.train$UrineFlow1 <- urnf
+
+# TotChol - Asked of participants 6 and older, therefore, all missing values takes average of AgeDecade
+tchol <- numeric()
+mean.tchol <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(TotChol,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$TotChol[i])){
+    tchol[i] <- mean.tchol$Mean[mean.tchol$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    tchol[i] <- num.train$TotChol[i]
+  }
+}
+num.train$TotChol <- tchol
+
+# BPSysAve - Asked of participants, therefore, all missing values takes average of AgeDecade
+bps <- numeric()
+mean.bps <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(BPSysAve,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$BPSysAve[i])){
+    bps[i] <- mean.bps$Mean[mean.bps$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    bps[i] <- num.train$BPSysAve[i]
+  }
+}
+num.train$BPSysAve <- bps
+
+# BPDiaAve - Asked of participants, therefore, all missing values as well as readings of zero takes average of AgeDecade
+bpd <- numeric()
+mean.bpd <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(BPDiaAve,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$BPDiaAve[i]) | num.train$BPDiaAve[i] == 0){
+    bpd[i] <- mean.bpd$Mean[mean.bpd$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    bpd[i] <- num.train$BPDiaAve[i]
+  }
+}
+num.train$BPDiaAve <- bpd
+
+# UrineVol1 - Asked of participants 6 and older, therefore, all missing values takes average of AgeDecade
+urnv <- numeric()
+mean.urnv <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(UrineVol1,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$UrineVol1[i])){
+    urnv[i] <- mean.urnv$Mean[mean.urnv$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    urnv[i] <- num.train$UrineVol1[i]
+  }
+}
+num.train$UrineVol1 <- urnv
+
+# Pulse - Asked of all participants, therefore, all missing values takes average of AgeDecade
+pulse <- numeric()
+mean.pulse <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(Pulse,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$Pulse[i])){
+    pulse[i] <- mean.pulse$Mean[mean.pulse$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    pulse[i] <- num.train$Pulse[i]
+  }
+}
+num.train$Pulse <- pulse
+
+# BMI - Asked of all participants over 2 years old, therefore, all missing values takes average of AgeDecade
+bmi <- numeric()
+mean.bmi <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(BMI,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$BMI[i])){
+    bmi[i] <- mean.bmi$Mean[mean.bmi$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    bmi[i] <- num.train$BMI[i]
+  }
+}
+num.train$BMI <- bmi
+
+# HomeRooms - Asked of all participants, therefore, all missing values takes average of AgeDecade
+rooms <- numeric()
+mean.rooms <- num.train %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(HomeRooms,na.rm=T))
+for(i in 1:dim(num.train)[1]){
+  if(is.na(num.train$HomeRooms[i])){
+    rooms[i] <- mean.rooms$Mean[mean.rooms$AgeDecade == num.train$AgeDecade[i]]
+  }
+  else{
+    rooms[i] <- num.train$HomeRooms[i]
+  }
+}
+num.train$HomeRooms <- rooms
+```
+
+Reran missing value check to confirm no null values are in the numeric data set.
+
+```{R}
+na.num.dat2 <- data.frame(Variable=character(),Null=numeric())
+
+for(i in 1:dim(num.train)[2]){
+  na.num.dat2[i,1] <- names(num.train)[i]
+  na.num.dat2[i,2] <- sum(is.na(num.train[,i]))
+}
+
+kable(na.num.dat2[order(na.num.dat$Null,decreasing=T),],caption='Total Null Values of Continuous Variables')
+
+```
+
+#### Step 6: Log Transformation of Numeric Variables
+
+I created a histogram of the numeric variables to test for skewness in the data and determine if any variables need log transformation to normalize them.
+
+```{r,fig_height=15,fig_width=15}
+ggplot(gather(num.train), aes(value)) + geom_histogram(bins=10) + facet_wrap(~key, scales = 'free_x') + ggtitle('Histogram of Numeric Features')
+```
+
+According to the histograms, *AlcoholDay*, *AlcoholYear*, *DaysMentHlthBad*, *DaysPhysHlthBad*, *UrineFlow1*, and *UrineVol1* all have right skewness and may benefit from log transformation by normalizing the data.
+
+Therefore, I will take the log transformation of these variables and rerun the histrogram to see if there are improvements.
+
+```{r,fig_height=15,fig_width=15}
+# converting skewed variables with log transform + 1 in the training and test sets in order to handle zero values
+skew.list <- c('AlcoholDay', 'AlcoholYear', 'DaysMentHlthBad', 'DaysPhysHlthBad', 'UrineFlow1', 'UrineVol1')
+for(i in 1:length(skew.list)){
+  num.train[[skew.list[i]]] <- log(num.train[[skew.list[i]]]+1)
+}
+
+for(i in 1:length(skew.list)){
+  num.test[[skew.list[i]]] <- log(num.test[[skew.list[i]]]+1)
+}
+
+ggplot(gather(num.train[,skew.list]), aes(value)) + geom_histogram(bins=10) + facet_wrap(~key, scales = 'free_x') + ggtitle('Result of Log Transformation')
+```
+
+According to the histogram, most of the variables improved from the transformation, but not all are normalized still. For example, **DaysPhysHlthBad** and **DaysMentHlthBad** have a dispropriately large number of zero values. However, this will be normalized during the scaling process.
+
+#### Step 7: Adjusting Extreme Values in Numeric Variables
+
+Examining variables in the histograms above, there are features that have large, extreme values that are skewing the mean and median. I will adjust these features by changing all values over the 99th quantile to the 99th quantile reduce the skew.
+
+```{r}
+# Examining summary statistics of variables that appear to have extreme values.
+list99 <- c('AlcoholDay','BMI','BPSysAve','SexNumPartYear','TotChol','nBabies','Pulse')
+kable(summary(num.train[list99]),caption='Summary Statistics of Large Skewed Variables')
+
+for(i in 1:length(list99)){
+  q <- as.numeric(quantile(num.train[[list99[i]]],0.99))
+  for (k in 1:dim(num.train)[1]){
+    if(num.train[k,list99[i]]>q){
+      num.train[k,list99[i]] <- q
+    }
+    else next
+  }
+}
+
+# kable(summary(num.train[list99]),caption='Summary Statistics After Adjustment')
+ggplot(gather(num.train[,list99]), aes(value)) + geom_histogram(bins=10) + facet_wrap(~key, scales = 'free_x') + ggtitle('Result of 99th Quantile Adjustment')
+```
+
+#### Step 8: Replace Numeric Variables in the Test Set
+
+Using the same method as with the training set, however I will replace the missing values with the mean of the training set as to not corrupt the test set in the validation process.
+
+```{r}
+# AgeDecade - missing values are only age 80, so those are clasified to the group '70+'
+num.test$AgeDecade <- ifelse(is.na(num.test$AgeDecade),8,num.test$AgeDecade)
+
+# nBabies - Female particpants aged 20 years or older. If male or younger than 20, then 0, else mean of AgeDecade
+nbab <- numeric()
+# mean.nbab <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(nBabies,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$nBabies[i]) && (age.test[i] %in% c(0:20) | fact.test$Gender == 'Male')){
+    nbab[i] <- 0
+  }
+  else if(is.na(num.test$nBabies[i])){
+    nbab[i] <- mean.nbab$Mean[mean.nbab$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    nbab[i] <- num.test$nBabies[i]
+  }
+}
+num.test$nBabies <- nbab 
+
+# PhysActiveDays - Particpants 12 years or older, however in the dataset the youngest age is 16 so irrelevant, therefore, the mean of the physical activity days for the AgeDecade was used for missing values
+phydays <- numeric()
+# mean.phydays <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(PhysActiveDays,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$PhysActiveDays[i])){
+    phydays[i] <- mean.phydays$Mean[mean.phydays$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    phydays[i] <- num.test$PhysActiveDays[i]
+  }
+}
+num.test$PhysActiveDays <- phydays 
+
+# AlcoholDay - Participants 18 years and younger assumes that drinks consumed is zero, all participants 18 years and older with missing values are average of AgeDecade
+alcday <- numeric()
+# mean.alcday <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(AlcoholDay,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$AlcoholDay[i]) && age.test[i] %in% c(0:17)){
+    alcday[i] <- 0
+  }
+  else if(is.na(num.test$AlcoholDay[i])){
+    alcday[i] <- mean.alcday$Mean[mean.alcday$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    alcday[i] <- num.test$AlcoholDay[i]
+  }
+}
+num.test$AlcoholDay <- alcday
+
+# SexNumPartYear - Participants not 18-59 assumed to have no sex partners, all other missing values replaced with average of AgeDecade
+sexnum <- numeric()
+# mean.sexnum <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(SexNumPartYear,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$SexNumPartYear[i]) && age.test[i] %in% c(0:17,60:80)){
+    sexnum[i] <- 0
+  }
+  else if(is.na(num.test$SexNumPartYear[i])){
+    sexnum[i] <- mean.sexnum$Mean[mean.sexnum$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    sexnum[i] <- num.test$SexNumPartYear[i]
+  }
+}
+num.test$SexNumPartYear <- sexnum
+
+# AlcoholYear - Participants younger than 18 assumes zero drinks. All other missing values uses mean of AgeDecade
+alcyr <- numeric()
+# mean.alcyr <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(AlcoholYear,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$AlcoholYear[i]) && age.test[i] %in% c(0:17)){
+    alcyr[i] <- 0
+  }
+  else if(is.na(num.test$AlcoholYear[i])){
+    alcyr[i] <- mean.alcyr$Mean[mean.alcyr$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    alcyr[i] <- num.test$AlcoholYear[i]
+  }
+}
+num.test$AlcoholYear <- alcyr
+
+# LittleInterest - Participants younger than 18 assumes no days of little interest in doing things, all other missing values uses mean of AgeDecade
+ltint <- numeric()
+# mean.ltint <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(LittleInterest,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$LittleInterest[i]) && age.test[i] %in% c(0:17)){
+    ltint[i] <- 0
+  }
+  else if(is.na(num.test$LittleInterest[i])){
+    ltint[i] <- mean.ltint$Mean[mean.ltint$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    ltint[i] <- num.test$LittleInterest[i]
+  }
+}
+num.test$LittleInterest <- ltint
+
+# Depressed - Participants younger than 18 assumes no depression, all other missing values uses mean of AgeDecade
+depr <- numeric()
+# mean.depr <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(Depressed,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$Depressed[i]) && age.test[i] %in% c(0:17)){
+    depr[i] <- 0
+  }
+  else if(is.na(num.test$Depressed[i])){
+    depr[i] <- mean.depr$Mean[mean.depr$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    depr[i] <- num.test$Depressed[i]
+  }
+}
+num.test$Depressed <- depr
+
+# DaysPhysHlthBad - Reported for participants 12 and older, however the youngest in the set is 16, so all missing values takes average of AgeDecade
+daysphy <- numeric()
+# mean.daysphy <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(DaysPhysHlthBad,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$DaysPhysHlthBad[i])){
+    daysphy[i] <- mean.daysphy$Mean[mean.daysphy$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    daysphy[i] <- num.test$DaysPhysHlthBad[i]
+  }
+}
+num.test$DaysPhysHlthBad <- daysphy
+
+# DaysMentHlthBad - Reported for participants 12 and older, however the youngest in the set is 16, so all missing values takes average of AgeDecade
+daysment <- numeric()
+# mean.daysment <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(DaysMentHlthBad,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$DaysMentHlthBad[i])){
+    daysment[i] <- mean.daysment$Mean[mean.daysment$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    daysment[i] <- num.test$DaysMentHlthBad[i]
+  }
+}
+num.test$DaysMentHlthBad <- daysment
+
+# HealthGen - Reported for participants 12 and older, however the youngest in the set is 16, so all missing values takes average of AgeDecade
+hgen <- numeric()
+# mean.hgen <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(HealthGen,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$HealthGen[i])){
+    hgen[i] <- mean.hgen$Mean[mean.hgen$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    hgen[i] <- num.test$HealthGen[i]
+  }
+}
+num.test$HealthGen <- hgen
+
+# HealthGen - No age restriction, so all missing values takes average of AgeDecade
+hhinc <- numeric()
+# mean.hhinc <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(HHIncome,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$HHIncome[i])){
+    hhinc[i] <- mean.hhinc$Mean[mean.hhinc$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    hhinc[i] <- num.test$HHIncome[i]
+  }
+}
+num.test$HHIncome <- hhinc
+
+# Education - Participants 16-17 assumes 9-11thGrade and 18-19 assumes HighSchool, all other missing values uses mean of AgeDecade
+edu <- numeric()
+# mean.edu <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(Education,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$Education[i]) && age.test[i] %in% c(16:17)){
+    edu[i] <- 2
+  }
+  else if(is.na(num.test$Education[i]) && age.test[i] %in% c(18:19)){
+    edu[i] <- 3
+  }
+  else if(is.na(num.test$Education[i])){
+    edu[i] <- mean.edu$Mean[mean.edu$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    edu[i] <- num.test$Education[i]
+  }
+}
+num.test$Education <- edu
+
+# UrineFlow1 - Asked of participants 6 and older, therefore, all missing values takes average of AgeDecade
+urnf <- numeric()
+# mean.urnf <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(UrineFlow1,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$UrineFlow1[i])){
+    urnf[i] <- mean.urnf$Mean[mean.urnf$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    urnf[i] <- num.test$UrineFlow1[i]
+  }
+}
+num.test$UrineFlow1 <- urnf
+
+# TotChol - Asked of participants 6 and older, therefore, all missing values takes average of AgeDecade
+tchol <- numeric()
+# mean.tchol <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(TotChol,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$TotChol[i])){
+    tchol[i] <- mean.tchol$Mean[mean.tchol$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    tchol[i] <- num.test$TotChol[i]
+  }
+}
+num.test$TotChol <- tchol
+
+# BPSysAve - Asked of participants, therefore, all missing values takes average of AgeDecade
+bps <- numeric()
+# mean.bps <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(BPSysAve,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$BPSysAve[i])){
+    bps[i] <- mean.bps$Mean[mean.bps$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    bps[i] <- num.test$BPSysAve[i]
+  }
+}
+num.test$BPSysAve <- bps
+
+# BPDiaAve - Asked of participants, therefore, all missing values as well as readings of zero takes average of AgeDecade
+bpd <- numeric()
+# mean.bpd <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(BPDiaAve,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$BPDiaAve[i]) | num.test$BPDiaAve[i] == 0){
+    bpd[i] <- mean.bpd$Mean[mean.bpd$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    bpd[i] <- num.test$BPDiaAve[i]
+  }
+}
+num.test$BPDiaAve <- bpd
+
+# UrineVol1 - Asked of participants 6 and older, therefore, all missing values takes average of AgeDecade
+urnv <- numeric()
+# mean.urnv <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(UrineVol1,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$UrineVol1[i])){
+    urnv[i] <- mean.urnv$Mean[mean.urnv$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    urnv[i] <- num.test$UrineVol1[i]
+  }
+}
+num.test$UrineVol1 <- urnv
+
+# Pulse - Asked of all participants, therefore, all missing values takes average of AgeDecade
+pulse <- numeric()
+# mean.pulse <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(Pulse,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$Pulse[i])){
+    pulse[i] <- mean.pulse$Mean[mean.pulse$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    pulse[i] <- num.test$Pulse[i]
+  }
+}
+num.test$Pulse <- pulse
+
+# BMI - Asked of all participants over 2 years old, therefore, all missing values takes average of AgeDecade
+bmi <- numeric()
+# mean.bmi <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(BMI,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$BMI[i])){
+    bmi[i] <- mean.bmi$Mean[mean.bmi$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    bmi[i] <- num.test$BMI[i]
+  }
+}
+num.test$BMI <- bmi
+
+# HomeRooms - Asked of all participants, therefore, all missing values takes average of AgeDecade
+rooms <- numeric()
+# mean.rooms <- num.test %>% group_by(AgeDecade) %>% dplyr::summarize(Mean = mean(HomeRooms,na.rm=T))
+for(i in 1:dim(num.test)[1]){
+  if(is.na(num.test$HomeRooms[i])){
+    rooms[i] <- mean.rooms$Mean[mean.rooms$AgeDecade == num.test$AgeDecade[i]]
+  }
+  else{
+    rooms[i] <- num.test$HomeRooms[i]
+  }
+}
+num.test$HomeRooms <- rooms
+```
+
+Confirming there are no null values in the test set.
+
+```{R}
+na.num.dat3 <- data.frame(Variable=character(),Null=numeric())
+
+for(i in 1:dim(num.test)[2]){
+  na.num.dat3[i,1] <- names(num.test)[i]
+  na.num.dat3[i,2] <- sum(is.na(num.test[,i]))
+}
+
+kable(na.num.dat3[order(na.num.dat$Null,decreasing=T),],caption='Total Null Values of Continuous Test Variables')
+
+```
+
+#### Step 9: Replace Categorical Variables with Dummy Variables
+
+Since some of the model I will be fitting require only numeric values, I am converting all the categorical features into dummy variables using the *dummy_cols* function. 
+
+Since there are some variables that are only present in the training set and not the test, I will remove these from the test set. These are the *Work_missing* and *Diabetes_No* features. Also since *Work_missing* is removed, there is no reason for *Work_No* as if I left it in I would fall into the dummy variable trap. 
+
+```{r}
+fact.train <- dummy_cols(fact.train,remove_first_dummy = T,remove_selected_columns = T)
+fact.test <- dummy_cols(fact.test,remove_first_dummy = T,remove_selected_columns = T)
+y.train <- ifelse(y.train == 'Yes',1,0)
+y.test <- ifelse(y.test == 'Yes',1,0)
+
+# There were no Work_missing so I will remove Work_missing and Work_NotWorking from sets for consistency and to reduce multicollinearity. Also there was no Diabeties_missing in test set, so i will remove Diabeties_No from the training set.
+
+fact.train <- subset(fact.train,select = -c(Work_missing,Work_NotWorking,Diabetes_No))
+fact.test <- subset(fact.test, select = -c(Work_NotWorking))
+```
+
+#### Step 10: Numeric Feature Scaling
+
+Scale each numeric variable for feature selection and model building using Robust Scaling method. This method is used because many of the features are not normal and I want to incorporate the extreme values. The formula for the robust scaling is below or the value of each feature minu the median of the feature divideed by the difference between the features 75th and 25th quantiles.
+
+$$\frac{X_i-\eta_i}{Q_{75i}-Q_{25i}} $$
+
+In addition, since I do not want to corrupt my test set, I will use the training median and quantiles when scaling the test data.
+
+```{r}
+# Function to run the Robust Scale formula
+rscale.fun <- function(value,median,q75,q25){
+  calc <- (value-median)/(q75-q25)
+  return(calc)
+}
+
+# Replacing values with scaled values for the training set
+num.train2 <- num.train
+for(i in 1:dim(num.train)[2]){
+    med <- median(num.train[,i])
+    Q25 <- as.numeric(quantile(num.train[,i],0.25))
+    Q75 <- as.numeric(quantile(num.train[,i],0.75))
+  for(k in 1:dim(num.train)[1]){
+    num.train2[k,i] <- rscale.fun(num.train[k,i],med,Q75,Q25)
+  }
+}
+
+# Replacing values with scaled values for the test set using the training quantiles and median
+num.test2 <- num.test
+for(i in 1:dim(num.test)[2]){
+    med <- median(num.train[,i])
+    Q25 <- as.numeric(quantile(num.train[,i],0.25))
+    Q75 <- as.numeric(quantile(num.train[,i],0.75))
+  for(k in 1:dim(num.test)[1]){
+    num.test2[k,i] <- rscale.fun(num.test[k,i],med,Q75,Q25)
+  }
+}
+```
+
+#### Step 11: Merge Categorical and Numeric Sets for Training and Test
+
+Since all the data conversions and adjustments are done (for the most part), I will bind the numeric and categorical variables together into the X train and X test sets.
+
+```{r}
+X.train <- cbind(fact.train,num.train2) 
+X.test  <- cbind(fact.test,num.test2)
+cat('The Dimensions of the train set is now', dim(X.train),'and the dimensions of the test set is now',dim(X.test))
+```
+
+#### Step 12: Feature Selection: Remove Reduntant Features
+
+At the beginning of the analysis, I did some manual variable removels, however there are still a large number of variables in the data set that should be removed in order to reduce the time it takes to run the models and drop any repetitive values that will not add much new information into the fits.
+
+I ran a correlation matrix on all the features and set a cutoff of 75% correlation rate to remove the highly correlated variables. The list of features are below and will be removed from the model.
+
+```{r echo = F, results = 'hide'}
+set.seed(202111)
+cormatrix <- cor(X.train)
+highcor <- findCorrelation(cormatrix,cutoff = 0.75,verbose=T)
+
+X.train <- subset(X.train,select = -highcor)
+X.test <- subset(X.test,select = -highcor)
+```
+```{r}
+kable(names(X.train[highcor]),caption='Correlated Variables over 75%')
+cat('The Dimensions of the train set is now', dim(X.train),'and the dimensions of the test set is now',dim(X.test))
+```
+
+#### Step 13: Feature Selection: Random Forest Accuracy-Based Importance
+
+Next, I will use the accuracy-based importance measure in the random forest to determine which variables are most importanct to the model. This function examine each variable and randomly determines the difference in the mean scores when it is in the model and then removed. The variables with the largest difference gets a higher score.
+
+```{r}
+X.train <- subset(X.train, select = -UrineVol1)
+X.test <- subset(X.test, select = -UrineVol1)
+
+set.seed(202111)
+rffs.dat <- cbind(y.train,X.train)
+fit_rf <- randomForest(as.factor(y.train)~.,data=rffs.dat)
+
+rf_imp <- data.frame(Variable = row.names(importance(fit_rf)), Importance = importance(fit_rf)[,1])
+row.names(rf_imp) <- c()
+
+kable(head(rf_imp[order(rf_imp$Importance,decreasing=T),],20),digits=4)
+```
+
+According to the Random Forest model, the top 3 important variables are **BMI**, **UrineFlow1**, and **TotChol**. This makes logical sense as people that are overweight will generally have trouble sleeping, people who have to use the bathroom frequently will be woken up in the middle of the night to use the restroom, and those will the high cholesterol are generally unhealthly. 
+
+It seems that there still maybe some relationship between blood pressure, total cholesterol, pulse and body mass index, so I will run interactions between these variables to see if the p values improve more than the variables themselves.
+
+After running many tests, BPSys and BPDia were the only ones that the interaction had a better p-value that the variables individually. Therefore, I added the interaction and dropped each feature from the training and test sets.
+
+```{r}
+# BPSys and BPDia seem highly related, so running logistic regression on these terms and the interaction to see if they can be replaced
+kable(summary(glm(y.train~BPSysAve+BPDiaAve+BPSysAve*BPDiaAve,data=rffs.dat,family='binomial'))$coefficients,digits=4,caption='Interaction Analysis of BPSys & BPDia')
+
+X.train$BP <- X.train$BPSysAve*X.train$BPDiaAve
+X.train <- subset(X.train, select = -c(BPSysAve,BPDiaAve))
+
+X.test$BP <- X.test$BPSysAve*X.test$BPDiaAve
+X.test <- subset(X.test, select = -c(BPSysAve,BPDiaAve))
+
+cat('The Dimensions of the train set is now', dim(X.train),'and the dimensions of the test set is now',dim(X.test))
+```
+
+I will rerun the random forest importance test to determine the final set of variables I will use as predictors in the models.
+
+```{r}
+set.seed(202111)
+rffs.dat <- cbind(y.train,X.train)
+fit_rf <- randomForest(as.factor(y.train)~.,data=rffs.dat)
+
+rf_imp <- data.frame(Variable = row.names(importance(fit_rf)), Importance = importance(fit_rf)[,1])
+row.names(rf_imp) <- c()
+
+kable(head(rf_imp[order(rf_imp$Importance,decreasing=T),],20),digits=4)
+```
+
+The largest drop in importance score is between **UrineVol1** and **Pulse**, however this only gives me 5 predictors, therefore I chose the third largest drop which is between **LittleInterest** and **SexNumPartYear** for the features in my models. This will give 19 predictor variables and captures are large amount of the importance.
+
+```{r}
+imp_feat <- as.character(head(rf_imp[order(rf_imp$Importance,decreasing=T),],19)$Variable)
+
+X.train2 <- X.train[imp_feat]
+X.test2 <- X.test[imp_feat]
+
+cat('The Dimensions of the final train set is now', dim(X.train2),'and the dimensions of the final test set is now',dim(X.test2))
+```
+
+### Task 2: Model Building, Testing, & Visualization
+
+#### Model 1: Logistic Regression
+
+As a base model to see if any other models will show improvement, I conducted a *glm* fuction for a logistic regression. Many of the variable chosen by the Random Forest have p-values under 0.05 except for *TotChol*, *UrineVol1*, *AlcoholYear*, and *AlcoholDay*. 
+
+```{r}
+train.dat <- cbind(y.train,X.train2)
+test.dat <- cbind(y.test,X.test2)
+
+colnames(train.dat)[1] <- 'SleepTrouble'
+colnames(test.dat)[1] <- 'SleepTrouble'
+
+nhanes.glm <- glm(SleepTrouble~.,data=train.dat,family='binomial')
+kable(summary(nhanes.glm)$coefficients,digits=4,caption='Coeifficents for Logistic Regression Model')
+par(mfrow=c(2,2))
+plot(nhanes.glm)
+```
+
+In addition, the coefficient estimate are in the direction I would except, for example as BMI goes up, the probabiliy of sleep trouble increases. Also, as urine flow goes up, the probability of sleep trouble goes up. A unexpected results is as Total cholestrol goes down sleep toruble goes up which is counterintuitive. Also, since the units are scaled, I am un able to see if it is a large or small effect on the prediction being made.
+
+Also, according to the graphs, the residuals are not random as there is a clear seperation between each class of the target. Also the Normal Q-Q plot shows a large curve near the median which suggests the model is not linear. 
+
+To determine the best fit for the logistic regression, I will run the predictions against the test data. In addition, I plotted the misclassification rate, TPR, and NPR to determine the optimal threshold.
+
+```{r}
+glm.pred <- predict.glm(nhanes.glm,newdata=test.dat,type='response')
+
+# Determing the best fit threshold and balance between TPR and TNR
+t.tuning.dat <- data.frame(Threshold=numeric(),Misclass=numeric(),TPR=numeric(),TNR=numeric())
+t.seq <- seq(0,1,by=0.01)
+for(i in 1:length(t.seq)){
+  mis.func <- misclass.fun.JH(glm.pred,test.dat[1],t.seq[i])
+  t.tuning.dat[i,1] <- t.seq[i]
+  t.tuning.dat[i,2] <- mis.func[1,2]
+  t.tuning.dat[i,3] <- mis.func[2,2]
+  t.tuning.dat[i,4] <- mis.func[3,2]
+}
+
+(ggplot(data=t.tuning.dat) 
+  + geom_line(aes(x=Threshold,y=Misclass,color='Misclass')) 
+  + geom_line(aes(x=Threshold,y=TPR,color='TPR'))
+  + geom_line(aes(x=Threshold,y=TNR,color='TNR'))
+  + geom_vline(aes(xintercept=0.2),linetype='dotted',size=0.8)
+  + labs(title = 'Optimal Threshold for Logistic Regression',y='Rate',color='Error Rates'))
+kable(misclass.fun.JH(glm.pred,test.dat[1],0.2),digits=4,caption='Error Rates\nThreshold=0.2')
+```
+
+According to the graph, the optimal threshold for the logistic regession model is 0.2. This yields a misclassificatio n rate of 0.36, TPR of 0.65, and TNR of 0.63. I chose that as a optimal threshold because it is generally where the TPR and NPR. In addition, this is most likely the case because the total number of Yes class is 25% of the total data set (both train and test).
+
+#### Model 2: K Nearest Neighbor (KNN)
+
+Using the *knn* function, I created a KNN model and ran a for loop to iterate through a sequence of k values to use in my model.
+
+```{r echo = F, results = 'hide'}
+# Only looking at odd k values to avoid tie issues
+k.seq <- seq(1,100,by=2)
+k.dat <- data.frame(K=numeric(),Misclass=numeric(),TPR=numeric(),TNR=numeric())
+for(i in 1:length(k.seq)){
+  k.mod <- knn(X.train2,X.test2,y.train,k=k.seq[i])
+  temp.y <- y.test
+  temp.p <- as.numeric(k.mod)-1
+  temp.mis <- misclass.fun.JH(temp.p,y.test)
+  k.dat[i,1] <- k.seq[i]
+  k.dat[i,2] <- temp.mis[1,2]
+  k.dat[i,3] <- temp.mis[2,2]
+  k.dat[i,4] <- temp.mis[3,2]
+}
+```
+```{r}
+(ggplot(data=k.dat) 
+  + geom_line(aes(x=K,y=Misclass,color='Misclass'),size=0.8) 
+  + geom_line(aes(x=K,y=TPR,color='TPR'),size=0.8)
+  + geom_line(aes(x=K,y=TNR,color='TNR'),size=0.8)
+  + geom_vline(aes(xintercept=5),linetype='dotted',size=0.8)
+  + labs(title = 'Optimal K for KNN',y='Rate',color='Error Rates'))
+
+knn.mod <- knn(X.train2,X.test2,y.train,k=5)
+```
+
+According to the above results, a k=1 is the best fit for the model where the misclassification rate is the lowest, and TPR is the highest. However, this is most likely picking up on noise as this would be very risky to use to predict sleep toruble with a new sample set. Therefore, I chose k=5 for the best fit model.
+
+```{r}
+kable(misclass.fun.JH(as.numeric(knn.mod)-1,y.test),digits=4,caption='Error Rates\nK=5')
+```
+
+THe results of the KNN model are worse than the logistic regression in regards to the TPR, which is the target rate I am focusing on to determine the best model due to the imbalance of classes in the target variable, **SleepTrouble**.
+
+#### Model 3: Linear Discriminant Analysis (LDA)
+
+For the LDA model, I tested 3 of the 4 methods: 
+
+* *Moment*: Standard estimators of the mean and variace
+* *mle*: Maximum Likelihood Estimates
+* *mve*: Minimum volue ellipsoid, used for high-breakdown robust estimator of multivariate location and scatter.
+
+Of the 3 models, the one with the highest ROC was chosen as the best fitting model. I also plotted the targe class seperation hisograms to see if there are clear, linear clusters the model can predict, and also examined the 5 most important variables and plotted those against the target to see if the model could linearly seperate the classes based on these.
+
+```{r echo = F, results = 'hide'}
+set.seed(202111)
+lda.m <- c('moment','mle','mve')
+lda.dat <- data.frame(Method=character(),Misclass=numeric(),TPR=numeric(),TNR=numeric())
+for(i in 1:length(lda.m)){
+  lda.mod <- lda(SleepTrouble~.,data=train.dat,method=lda.m[i])
+  lda.pred <- predict(lda.mod,test.dat)
+  lda.temp <- cbind(test.dat$SleepTrouble,Pred_LDA=as.numeric(lda.pred$class)-1)
+  temp.mis <- misclass.fun.JH(lda.temp[,2],lda.temp[,1])
+  lda.dat[i,1] <- lda.m[i]
+  lda.dat[i,2] <- temp.mis[1,2]
+  lda.dat[i,3] <- temp.mis[2,2]
+  lda.dat[i,4] <- temp.mis[3,2]  
+}
+mve.mod <- lda(SleepTrouble~.,data=train.dat,method='mve')
+mve.pred <- predict(mve.mod,test.dat)
+```
+```{r}
+kable(lda.dat,digits=4,caption='Error Rates\nAll Methods')
+ldahist(mve.pred$x[,1],g = test.dat$SleepTrouble)
+partimat(as.factor(SleepTrouble)~BMI+UrineFlow1+BP+Pulse+TotChol,data=train.dat,method='lda',plot.matrix=T,imageplot = T)
+```
+
+The best fitted model would be the *mve* method, however this is worse preforming than the logistic regression model while greatly favoring just the negative (zero) class of the target. 
+
+According to the analysis above, there does not appear to be a clear linear seperation in the model that would warrant the use of LDA. The histogram shows a near complete overlap of the 2 classes (SleepTrouble:Yes and SleepTrouble:No) with no visible shift in the means.
+
+Also, when examining the graphs of the top 5 features of the model, I do not see any speration in the classes. 
+
+#### Model 4: Quadratic Discriminant Analysis (QDA)
+
+For the QDA model, I ran 3 methods to determine which one was the best fit:
+
+* *moment*: Standard estimators of the mean and variance
+* *mle*: Maximum Likelihood Estimates
+* *t*: Robust estimates based on a t distribution
+
+I then chose the best fitting model based on a TPR score and then graphed the top 5 features of the model to see if there is a quadratic relationship between these and the target.
+
+```{r echo = F, results = 'hide'}
+set.seed(202111)
+qda.m <- c('moment','mle','t')
+qda.dat <- data.frame(Method=character(),Misclass=numeric(),TPR=numeric(),TNR=numeric())
+for(i in 1:length(qda.m)){
+  qda.mod <- qda(as.factor(SleepTrouble)~.,data=train.dat,method=qda.m[i])
+  qda.pred <- predict(qda.mod,test.dat)
+  qda.temp <- cbind(test.dat$SleepTrouble,Pred_QDA=as.numeric(qda.pred$class)-1)
+  temp.mis <- misclass.fun.JH(qda.temp[,2],qda.temp[,1])
+  qda.dat[i,1] <- qda.m[i]
+  qda.dat[i,2] <- temp.mis[1,2]
+  qda.dat[i,3] <- temp.mis[2,2]
+  qda.dat[i,4] <- temp.mis[3,2]  
+}
+```
+```{r}
+kable(qda.dat,digits=4,caption='Error Rates\nAll Methods')
+partimat(as.factor(SleepTrouble)~BMI+UrineFlow1+BP+Pulse+TotChol,data=train.dat,method='qda',plot.matrix=T,imageplot =T, Main='QDA Partition Plot for Top 5 Features')
+```
+
+According to the analysis above, the *t* method prefoms the best with a 0.54. However, while the misclassification rate is better than the logistic regression model, the TPR is not. In addition, the graph does show some seperation between the classes on a number of the top 5 variables which is a great improvement from the LDA model. However, there is still overlap between the two and BP seems to have the largest seperation between classes.
+
+#### Model 5: Neural Network
+
+For the neural network model, I attempted to tune the hyper parameters, however R does not handle neural network models well as it only uses a single core. While I would have preferred, and most likely gottne better results, with a random search hyper parameter tuner, I picked a range of *size*,*decay*, and *maxit*. I then ran a for loop each sequence of the hyper parameters and chose the best fit for each to determine the best fit nueral network model.
+
+In addition, the **nnet** package does not allow you to use more than 1 hidden layer, however due to Rs ability to run high computational functions, this will take to long to run fi more hidden layers were added. However, if I was using Python, I would test it with 1-3 hidden layers and a sequence of number of hidden nodes per layer.
+
+```{r echo = F, results = 'hide'}
+# Iterate size adj
+set.seed(202111)
+nn.size <- data.frame(Size=numeric(),Misclass=numeric(),TPR=numeric(),TNR=numeric())
+size.seq <- seq(5,45,by=5)
+for(s in 1:length(size.seq)){
+  set.seed(202111)
+  temp.mod <- nnet(as.factor(SleepTrouble)~.,data=train.dat,size=size.seq[s],decay=0.001,maxit=1000)
+  temp.pred <- predict(temp.mod,newdata=test.dat,type='class')
+  temp.func <- misclass.fun.JH(temp.pred,test.dat[1])
+  nn.size[s,1] <- size.seq[s]
+  nn.size[s,2] <- temp.func[1,2]
+  nn.size[s,3] <- temp.func[2,2]
+  nn.size[s,4] <- temp.func[3,2]
+}  
+
+# Iterate decay adj
+set.seed(202111)
+nn.decay <- data.frame(Decay=numeric(),Misclass=numeric(),TPR=numeric(),TNR=numeric())
+decay.seq <- c(0.0001,0.001,0.01,0.05,0.1)
+for(d in 1:length(decay.seq)){
+  set.seed(202111)
+  temp.mod <- nnet(as.factor(SleepTrouble)~.,data=train.dat,size=45,decay=decay.seq[d],maxit=1000)
+  temp.pred <- predict(temp.mod,newdata=test.dat,type='class')
+  temp.func <- misclass.fun.JH(temp.pred,test.dat[1])
+  nn.decay[d,1] <- decay.seq[d]
+  nn.decay[d,2] <- temp.func[1,2]
+  nn.decay[d,3] <- temp.func[2,2]
+  nn.decay[d,4] <- temp.func[3,2]
+} 
+
+# Iterate maxit adj
+set.seed(202111)
+nn.maxit <- data.frame(Maxit=numeric(),Misclass=numeric(),TPR=numeric(),TNR=numeric())
+maxit.seq <- c(10,100,500,1000,2000)
+for(m in 1:length(maxit.seq)){
+  set.seed(202111)
+  temp.mod <- nnet(as.factor(SleepTrouble)~.,data=train.dat,size=45,decay=0.001,maxit=maxit.seq[m])
+  temp.pred <- predict(temp.mod,newdata=test.dat,type='class')
+  temp.func <- misclass.fun.JH(temp.pred,test.dat[1])
+  nn.maxit[m,1] <- maxit.seq[m]
+  nn.maxit[m,2] <- temp.func[1,2]
+  nn.maxit[m,3] <- temp.func[2,2]
+  nn.maxit[m,4] <- temp.func[3,2]
+} 
+```
+```{r}
+kable(nn.size,digits=4,caption='Error Rates Across Size')
+kable(nn.decay,digits=4,caption='Error Rates Across Decay')
+kable(nn.maxit,digits=4,caption='Error Rates Across Maxit')
+```
+
+According to the hyperparameter tuning, the best fit model is a size of 45 hidden nodes, a decay rate of 0.0001, and max iterations of 500. Therefore I will use these hyper parameters to fit my neural network and adjust the thresholds to see if this can improve. 
+
+```{r echo = F, results = 'hide'}
+set.seed(202111)
+nn.mod=nnet(as.factor(SleepTrouble)~.,data=train.dat,size=45,decay=0.0001,maxit=500)
+nn.pred <- as.numeric(predict(nn.mod,newdata=test.dat,type='raw'))
+
+
+nn.thres.dat <- data.frame(Threshold=numeric(),Misclass=numeric(),TPR=numeric(),TNR=numeric())
+nn.seq <- seq(0,1,by=0.01)
+for(i in 1:length(nn.seq)){
+  temp.mis <- misclass.fun.JH(nn.pred,test.dat[1],nn.seq[i])
+  nn.thres.dat[i,1] <- nn.seq[i]
+  nn.thres.dat[i,2] <- temp.mis[1,2]
+  nn.thres.dat[i,3] <- temp.mis[2,2]
+  nn.thres.dat[i,4] <- temp.mis[3,2]   
+}
+```
+```{r}
+(ggplot(data=nn.thres.dat) 
+  + geom_line(aes(x=Threshold,y=Misclass,color='Misclass')) 
+  + geom_line(aes(x=Threshold,y=TPR,color='TPR'))
+  + geom_line(aes(x=Threshold,y=TNR,color='TNR'))
+  + geom_vline(aes(xintercept=0.45),linetype='dotted',size=0.8)
+  + labs(title = 'Optimal Threshold for Neural Network',y='Rate',color='Error Rates'))
+
+kable(misclass.fun.JH(nn.pred,test.dat[1],0.45),digits=4,caption='Error Rates\nThreshold=0.45')
+```
+
+According to the threshold analysis, the optimal threshold level is at 0.45. This now has a close split between each of the classese and out preforms the linear regression model. In addition, we did not have to adjust the threshold as much as the logisti regression model to even out the TPR and TNR, which mean it does a better job at fitting imbalanced class targets.
+
+## Question 2
+
+What classifier do you recommend from Exercise 1 and why?
+
+**Answer**
+
+I will compare each of the optimal tuned models to each other using misclassification rate, TPR, and TNR to determine the best fit model recommendation. I also will show the nueral network at a threshold of 0.45.
+
+```{r}
+final.glm <- misclass.fun.JH(glm.pred,test.dat[1],0.2)
+final.knn <- misclass.fun.JH(as.numeric(knn.mod)-1,y.test)
+final.nn <- misclass.fun.JH(nn.pred,test.dat[1],0.45)
+final.dat <- data.frame(Measure=c('Misclass','TPR','TNR'),
+                        Logistic=c(final.glm[1,2],final.glm[2,2],final.glm[3,2]),
+                        KNN=c(final.knn[1,2],final.knn[2,2],final.knn[3,2]),
+                        LDA=c(lda.dat[3,2],lda.dat[3,3],lda.dat[3,4]),
+                        QDA=c(qda.dat[3,2],qda.dat[3,3],qda.dat[3,4]),
+                        NNet = c(final.nn[1,2],final.nn[2,2],final.nn[3,2]))
+kable(final.dat,digits=4,caption='Model Summary')
+```
+
+According to the summary above, I would chose the neural network as my final model. While the logistic regression isn't that much of a difference, I am concerned about the residual plots and the lack of randomness in the residuals as well as the large adjustment of the threshold to even out the TPR and TNR.  I believe if I was able to modify the number of hidden layers, as well as tune the other hyper parameters better, the neural network may preform even better.
+
+In addition, I would also try using a different scaling method, and swap out some of the variables I dropped. For example, I would use **Age** instead of **AgeDecade** to see if that improved the model fit.
+
+Finally, I learned that sleep trouble appears to be mostly caused by health issues such as being overweight, bladder issues, and elevated heart rate. I also noticed that there is not one or 2 causes to sleep trouble. That different health issues cause sleep problems for different people as I noticed that the model improved when I used more of the top important variables then less (for example the top 20 vs. the top 10 or 5). Also, I would look at more variable (such as polynomial) conversions and see if more interaction variables are more useful.
+
+```{r, results = 'hide'}
+end <- as.numeric(Sys.time())
+runtime <- (end - start)/60
+cat('Total code runtime is',round(runtime,0),'minutes')
+```
+
+## Sources
+
+\footnotesize [lda: Linear Discriminant Analysis](https://www.rdocumentation.org/packages/MASS/versions/7.3-53.1/topics/lda), [Quadratic Discriminant Analysis](https://stat.ethz.ch/R-manual/R-devel/library/MASS/html/qda.html), [How to show code but hide output in RMarkdown?](https://stackoverflow.com/questions/47710427/how-to-show-code-but-hide-output-in-rmarkdown), [varying classification threshold to produce ROC curves.](https://stats.stackexchange.com/questions/221409/varying-classification-threshold-to-produce-roc-curves), [Package ‘nnet’](https://cran.r-project.org/web/packages/nnet/nnet.pdf), [predict.nnet: Predict New Examples by a Trained Neural Net](https://www.rdocumentation.org/packages/nnet/versions/7.3-15/topics/predict.nnet), [Classification: LDA and QDA Approaches](https://pages.mtu.edu/~shanem/psy5220/daily/Day12/classification.html), [A Gentle Introduction to Threshold-Moving for Imbalanced Classification](https://machinelearningmastery.com/threshold-moving-for-imbalanced-classification/), [How is Variable Importance Calculated for a Random Forest?](https://www.displayr.com/how-is-variable-importance-calculated-for-a-random-forest/), [Feature Importance - How to choose the number of best features?](https://datascience.stackexchange.com/questions/12697/feature-importance-how-to-choose-the-number-of-best-features), [FEATURE SELECTION TECHNIQUES WITH R](https://dataaspirant.com/feature-selection-techniques-r/), [Making dummy variables with dummy_cols()](https://cran.r-project.org/web/packages/fastDummies/vignettes/making-dummy-variables.html), [N/A (Not Applicable) cases, How to deal with it? - duplicate](https://stats.stackexchange.com/questions/248784/n-a-not-applicable-cases-how-to-deal-with-it), [Remove Multiple Values from Vector in R (Example)](https://statisticsglobe.com/remove-multiple-values-from-vector-in-r), [How should we handle the missing values in test data?](https://www.researchgate.net/post/How-should-we-handle-the-missing-values-in-test-data), and [Subset columns using their names and types](https://dplyr.tidyverse.org/reference/select.html)
